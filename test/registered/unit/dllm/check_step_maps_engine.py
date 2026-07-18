@@ -111,12 +111,14 @@ def main() -> None:
         batch_outputs = engine.generate(
             input_ids=[input_ids, input_ids],
             sampling_params=sampling_params,
+            return_logprob=True,
             return_step_maps=[False, True],
         )
         stream_outputs = list(
             engine.generate(
                 input_ids=input_ids,
                 sampling_params=sampling_params,
+                return_logprob=True,
                 return_step_maps=True,
                 stream=True,
             )
