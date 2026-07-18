@@ -1,0 +1,4 @@
+block_size: 4
+# Force one mask-to-token transition per iteration. This makes the expected
+# 1-based step map for every complete block a permutation of [1, 2, 3, 4].
+threshold: 1.1

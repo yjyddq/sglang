@@ -12,7 +12,6 @@ import torch
 from sglang.srt.dllm.algorithm.sampling import sample_block_tokens
 from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
 from sglang.srt.sampling.sampling_params import TOP_K_ALL
-from sglang.test.test_utils import CustomTestCase
 
 
 def _make_sampling_info(
@@ -36,7 +35,7 @@ def _make_sampling_info(
     )
 
 
-class TestDllmSampling(CustomTestCase):
+class TestDllmSampling(unittest.TestCase):
 
     def test_greedy_preserves_argmax(self):
         logits = torch.tensor(

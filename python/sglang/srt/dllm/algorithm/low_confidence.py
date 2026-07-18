@@ -72,6 +72,10 @@ class LowConfidence(DllmAlgorithm):
                 curr_logits = logits_output.full_logits[
                     curr_block_start:curr_block_end,
                 ]
+                # The mask token represents latent state, not a valid sampled
+                # action. Excluding it guarantees every recorded transfer is
+                # an actual mask-to-token transition.
+                curr_logits[:, self.mask_id] = -float("inf")
 
                 positions = (
                     forward_batch.positions[curr_block_start:curr_block_end]

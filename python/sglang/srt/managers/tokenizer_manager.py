@@ -167,6 +167,7 @@ class ReqState:
     input_token_ids_logprobs_idx: List = dataclasses.field(default_factory=list)
     output_token_ids_logprobs_val: List = dataclasses.field(default_factory=list)
     output_token_ids_logprobs_idx: List = dataclasses.field(default_factory=list)
+    step_maps: List[int] = dataclasses.field(default_factory=list)
 
     # For detokenized logprobs
     input_token_logprobs: List[Any] = dataclasses.field(default_factory=list)
@@ -1484,6 +1485,15 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
             BatchTokenIDOutput,
         ],
     ):
+        received_step_maps = getattr(recv_obj, "step_maps", None)
+        if received_step_maps is not None and len(received_step_maps) != len(
+            recv_obj.rids
+        ):
+            raise RuntimeError(
+                "dLLM step-map batch mismatch in TokenizerManager: got "
+                f"{len(received_step_maps)} maps for {len(recv_obj.rids)} requests"
+            )
+
         for i, rid in enumerate(recv_obj.rids):
             state = self.rid_to_state.get(rid, None)
             if state is None:
@@ -1545,8 +1555,26 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
                 meta_info["hidden_states"] = recv_obj.output_hidden_states[i]
             if getattr(recv_obj, "routed_experts", None):
                 meta_info["routed_experts"] = recv_obj.routed_experts[i]
-            if getattr(recv_obj, "step_maps", None):
-                meta_info["step_maps"] = recv_obj.step_maps[i]
+            incremental_stream = self.server_args.stream_output and getattr(
+                state.obj, "stream", False
+            )
+            if received_step_maps is not None and received_step_maps[i] is not None:
+                step_map_chunk = received_step_maps[i]
+                output_id_chunk = recv_obj.output_ids[i]
+                if len(step_map_chunk) != len(output_id_chunk):
+                    raise RuntimeError(
+                        "dLLM step_maps/output_ids chunk mismatch: got "
+                        f"{len(step_map_chunk)} steps and "
+                        f"{len(output_id_chunk)} tokens"
+                    )
+                state.step_maps.extend(step_map_chunk)
+                meta_info["step_maps"] = (
+                    list(step_map_chunk)
+                    if incremental_stream
+                    else state.step_maps.copy()
+                )
+            elif not incremental_stream and state.step_maps:
+                meta_info["step_maps"] = state.step_maps.copy()
             if getattr(recv_obj, "customized_info", None):
                 for k, v in recv_obj.customized_info.items():
                     meta_info[k] = v[i]
@@ -1594,6 +1622,14 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
 
             state.finished = recv_obj.finished_reasons[i] is not None
             if state.finished:
+                if getattr(state.obj, "return_step_maps", False) and len(
+                    state.step_maps
+                ) != len(state.output_ids):
+                    raise RuntimeError(
+                        f"dLLM final step-map mismatch for request {rid}: got "
+                        f"{len(state.step_maps)} steps and "
+                        f"{len(state.output_ids)} tokens"
+                    )
                 state.finished_time = time.time()
                 state.finished_time_perf = time.perf_counter()
                 meta_info["e2e_latency"] = state.finished_time - state.created_time

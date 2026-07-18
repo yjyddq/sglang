@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 import torch
 
 from sglang.srt.disaggregation.utils import DisaggregationMode
+from sglang.srt.dllm.metadata import normalize_step_map_chunk
 from sglang.srt.environ import envs
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.layers.moe.routed_experts_capturer import get_global_experts_capturer
@@ -384,16 +385,23 @@ class SchedulerOutputProcessorMixin:
 
         self.token_to_kv_pool_allocator.free_group_begin()
 
-        if (
-            result.logits_output
-            and hasattr(result.logits_output, "step_maps")
-            and result.logits_output.step_maps is not None
-        ):
-            step_maps = result.logits_output.step_maps
-            for idx in range(min(batch.batch_size(), len(step_maps))):
-                req = batch.reqs[idx]
-                if req.return_step_maps:
-                    req.step_maps = step_maps[idx]
+        step_maps = (
+            getattr(result.logits_output, "step_maps", None)
+            if result.logits_output is not None
+            else None
+        )
+        has_generated_tokens = bool(result.next_token_ids)
+        if has_generated_tokens and any(req.return_step_maps for req in batch.reqs):
+            if step_maps is None:
+                raise RuntimeError(
+                    "dLLM return_step_maps was requested, but the model did not "
+                    "return step maps"
+                )
+            if len(step_maps) != batch.batch_size():
+                raise RuntimeError(
+                    "dLLM step-map batch mismatch: got "
+                    f"{len(step_maps)} maps for {batch.batch_size()} requests"
+                )
 
         for idx in range(batch.batch_size()):
             # If no new tokens generated, meaning the prefilling stage
@@ -404,8 +412,26 @@ class SchedulerOutputProcessorMixin:
             next_token_ids = result.next_token_ids[idx].tolist()
             self.num_generated_tokens += len(next_token_ids)
 
-            for _token_idx, next_token_id in enumerate(next_token_ids):
+            step_map_chunk = None
+            if req.return_step_maps:
+                if req.step_maps is None:
+                    raise RuntimeError(
+                        f"dLLM step-map storage is missing for request {req.rid}"
+                    )
+                if len(req.step_maps) != len(req.output_ids):
+                    raise RuntimeError(
+                        f"dLLM accumulated step-map mismatch for request {req.rid}: "
+                        f"got {len(req.step_maps)} steps and "
+                        f"{len(req.output_ids)} tokens before appending a block"
+                    )
+                step_map_chunk = normalize_step_map_chunk(
+                    step_maps[idx], len(next_token_ids), req.rid
+                )
+
+            for token_idx, next_token_id in enumerate(next_token_ids):
                 req.output_ids.append(next_token_id)
+                if step_map_chunk is not None:
+                    req.step_maps.append(step_map_chunk[token_idx])
                 req.check_finished()
                 if req.finished():
                     release_kv_cache(req, self.tree_cache)
@@ -518,13 +544,26 @@ class SchedulerOutputProcessorMixin:
                     logits_output.hidden_states[i].cpu().clone().tolist()
                 )
 
-            # Handle step maps for diffusion LLM
+            # Handle step maps for diffusion LLM paths that use decode mode.
             if (
                 req.return_step_maps
                 and logits_output.step_maps is not None
                 and i < len(logits_output.step_maps)
             ):
-                req.step_maps = logits_output.step_maps[i]
+                step_map_chunk = normalize_step_map_chunk(
+                    logits_output.step_maps[i], new_accepted_len, req.rid
+                )
+                if req.step_maps is None:
+                    raise RuntimeError(
+                        f"dLLM step-map storage is missing for request {req.rid}"
+                    )
+                req.step_maps.extend(step_map_chunk)
+                if len(req.step_maps) != len(req.output_ids):
+                    raise RuntimeError(
+                        f"dLLM accumulated step-map mismatch for request {req.rid}: "
+                        f"got {len(req.step_maps)} steps and "
+                        f"{len(req.output_ids)} tokens"
+                    )
 
             if req.grammar is not None:
                 # FIXME: this try-except block is for handling unexpected xgrammar issue.
@@ -935,7 +974,7 @@ class SchedulerOutputProcessorMixin:
         load = self.get_load()
         routed_experts = None
         customized_info = {}
-        output_step_maps = None
+        output_step_maps = []
 
         queue_times = []
         forward_entry_times = []
@@ -1140,13 +1179,25 @@ class SchedulerOutputProcessorMixin:
                         routed_experts = []
                     routed_experts.append(req.routed_experts)
 
-                if req.return_step_maps and req.step_maps is not None:
-                    if output_step_maps is None:
-                        output_step_maps = []
-                    step_maps_data = req.step_maps
-                    if hasattr(step_maps_data, "cpu"):
-                        step_maps_data = step_maps_data.cpu().tolist()
-                    output_step_maps.append(step_maps_data)
+                if req.return_step_maps:
+                    if req.step_maps is None:
+                        raise RuntimeError(
+                            f"dLLM step-map storage is missing for request {req.rid}"
+                        )
+                    step_map_chunk = req.step_maps[
+                        send_token_offset : len(output_ids_)
+                    ]
+                    if len(step_map_chunk) != len(output_ids[-1]):
+                        raise RuntimeError(
+                            f"dLLM streamed step-map mismatch for request {req.rid}: "
+                            f"got {len(step_map_chunk)} steps and "
+                            f"{len(output_ids[-1])} tokens"
+                        )
+                    output_step_maps.append(step_map_chunk)
+                else:
+                    # Preserve batch alignment for requests that did not ask for
+                    # step maps when another request in the batch did.
+                    output_step_maps.append(None)
 
                 if req.customized_info is not None:
                     for k, v in req.customized_info.items():
@@ -1204,7 +1255,11 @@ class SchedulerOutputProcessorMixin:
                     output_token_entropy_val=None,
                     output_hidden_states=output_hidden_states,
                     routed_experts=routed_experts,
-                    step_maps=output_step_maps,
+                    step_maps=(
+                        output_step_maps
+                        if any(item is not None for item in output_step_maps)
+                        else None
+                    ),
                     customized_info=customized_info,
                     placeholder_tokens_idx=None,
                     placeholder_tokens_val=None,

@@ -212,7 +212,7 @@ class GenerateReqInput(BaseReq, APIServingTimingMixin):
     routed_experts_start_len: int = 0
 
     # Whether to return diffusion LLM step maps
-    return_step_maps: bool = False
+    return_step_maps: Optional[Union[List[bool], bool]] = False
 
     # The modalities of the image data [image, multi-images, video]
     modalities: Optional[List[str]] = None
@@ -1045,7 +1045,7 @@ class BatchTokenIDOutput(
     retraction_counts: List[int]
 
     # Diffusion LLM step maps
-    step_maps: Optional[List[List[int]]] = None
+    step_maps: Optional[List[Optional[List[int]]]] = None
 
     # The trainer step id. Used to know which step's weights are used for sampling.
     token_steps: List[List[int]] = None
@@ -1141,7 +1141,7 @@ class BatchStrOutput(
     token_steps: List[List[int]] = None
 
     # Diffusion LLM step maps
-    step_maps: Optional[List[List[int]]] = None
+    step_maps: Optional[List[Optional[List[int]]]] = None
 
     # Load for DP balance
     load: GetLoadReqOutput = None

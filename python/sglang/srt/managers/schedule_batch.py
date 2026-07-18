@@ -747,7 +747,7 @@ class Req(ReqDllmMixin):
         self.customized_info: Optional[Dict[str, List[Any]]] = None
 
         # Diffusion LLM step maps
-        self.step_maps: Optional[List[torch.Tensor]] = None
+        self.step_maps: Optional[List[int]] = [] if return_step_maps else None
 
         # Embedding (return values)
         self.embedding = None

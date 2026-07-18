@@ -237,6 +237,7 @@ class Engine(EngineBase):
         rid: Optional[Union[List[str], str]] = None,
         session_params: Optional[Dict] = None,
         priority: Optional[int] = None,
+        return_step_maps: Optional[Union[List[bool], bool]] = False,
     ) -> Union[Dict, Iterator[Dict]]:
         """
         The arguments of this function is the same as `sglang/srt/managers/io_struct.py::GenerateReqInput`.
@@ -267,6 +268,7 @@ class Engine(EngineBase):
             custom_logit_processor=custom_logit_processor,
             return_hidden_states=return_hidden_states,
             return_routed_experts=return_routed_experts,
+            return_step_maps=return_step_maps,
             stream=stream,
             bootstrap_host=bootstrap_host,
             bootstrap_port=bootstrap_port,
@@ -329,6 +331,7 @@ class Engine(EngineBase):
         rid: Optional[Union[List[str], str]] = None,
         session_params: Optional[Dict] = None,
         priority: Optional[int] = None,
+        return_step_maps: Optional[Union[List[bool], bool]] = False,
     ) -> Union[Dict, AsyncIterator[Dict]]:
         """
         The arguments of this function is the same as `sglang/srt/managers/io_struct.py::GenerateReqInput`.
@@ -360,6 +363,7 @@ class Engine(EngineBase):
             lora_path=lora_path,
             return_hidden_states=return_hidden_states,
             return_routed_experts=return_routed_experts,
+            return_step_maps=return_step_maps,
             stream=stream,
             custom_logit_processor=custom_logit_processor,
             bootstrap_host=bootstrap_host,
